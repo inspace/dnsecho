@@ -1,13 +1,17 @@
 #!/usr/bin/env python
-import os
-import socket
-import datetime
 import sys
 import traceback
+import os
+sys.path.insert(0, '/usr/local/lib/python2.7/dist-packages')
+sys.path.insert(0, os.path.expanduser('~/lib'))
+
+import socket
+import datetime
 import select
 import copy
 import json
 from dnsrecord import *
+import redis
 
 try:
     import syslog as sl
@@ -93,9 +97,10 @@ def find(dname, qtype, address):
 
     fqdn = str(dname)
     records = find_records(fqdn, qtype, address)
-    if records:
+    if records: # if we have an exact match
         return records
-    
+   
+    first = dname.parts[0] #could be unique id 
     dn = dname.parts[1:]
     while dn:
         nl = ['*']
@@ -103,11 +108,21 @@ def find(dname, qtype, address):
         nn = '.'.join(nl)
         records = find_records(nn, qtype, address)
         if records:
+
+            #found match with wildcard
+            if first.isalnum(): #make sure this is alphanumeric
+                ldns_ip = address[0]
+                persist(first, ldns_ip)
+
             return records
         
-        dn.pop(0)
-    
+        dn.pop(0)   
+
     return []
+
+def persist(key, value):
+    r.sadd(key, value)
+    r.expire(key, 20)
 
 def resolve(query, address):
     try:
@@ -188,12 +203,18 @@ def udp_proc((pstr,adrs), ssock):
         ssock.sendto(res.buf, 0, adrs)
 
 def main():
-    
+   
+ 
     add_record('whoami.ipgeoloc.com', RecordSOA(300, 'dns1.registrar-servers.com', 'root@ipgeoloc.com', None,
-                                    3600, 1800, 20000, 3600))
+               3600, 1800, 20000, 3600))
+    add_record('test.ipgeoloc.com', RecordSOA(300, 'dns1.registrar-servers.com', 'root@ipgeoloc.com', None,
+               3600, 1800, 20000, 3600))
 
     #placeholders for client-specific
     add_record('whoami.ipgeoloc.com', RecordA(1, EMPTY))
+    add_record('*.whoami.ipgeoloc.com', RecordA(1, EMPTY))
+    add_record('test.ipgeoloc.com', RecordA(300, '45.55.170.193'))
+    add_record('*.test.ipgeoloc.com', RecordA(300, '45.55.170.193'))
 
     # UDP
     ssock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -240,5 +261,8 @@ def dump_buffer(pack):
 
 
 if __name__=='__main__':
+
+    r = redis.Redis(unix_socket_path='/run/redis/redis.sock')
+
     openlog(ident='EchoDNSServer')
     main()
